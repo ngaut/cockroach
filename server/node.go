@@ -134,7 +134,7 @@ func BootstrapCluster(clusterID string, engines []engine.Engine, stopper *util.S
 
 		// The bootstrapping store will not connect to other nodes so its
 		// StoreConfig doesn't really matter.
-		s := storage.NewStore(ctx, eng, &proto.NodeDescriptor{NodeID: 1})
+		s := storage.NewStore(ctx, eng, &proto.NodeDescriptor{NodeID: 1}, stopper)
 
 		// Verify the store isn't already part of a cluster.
 		if len(s.Ident.ClusterID) > 0 {
@@ -269,7 +269,7 @@ func (n *Node) initStores(engines []engine.Engine, stopper *util.Stopper) error 
 		return util.Error("no engines")
 	}
 	for _, e := range engines {
-		s := storage.NewStore(n.ctx, e, &n.Descriptor)
+		s := storage.NewStore(n.ctx, e, &n.Descriptor, stopper)
 		// Initialize each store in turn, handling un-bootstrapped errors by
 		// adding the store to the bootstraps list.
 		if err := s.Start(stopper); err != nil {

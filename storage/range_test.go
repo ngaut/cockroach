@@ -143,7 +143,7 @@ func (tc *testContext) Start(t testing.TB) {
 		ctx.Gossip = tc.gossip
 		ctx.Transport = tc.transport
 		ctx.EventFeed = tc.feed
-		tc.store = NewStore(ctx, tc.engine, &proto.NodeDescriptor{NodeID: 1})
+		tc.store = NewStore(ctx, tc.engine, &proto.NodeDescriptor{NodeID: 1}, tc.stopper)
 		if err := tc.store.Bootstrap(proto.StoreIdent{
 			ClusterID: "test",
 			NodeID:    1,
@@ -240,7 +240,9 @@ func TestRangeContains(t *testing.T) {
 	ctx := TestStoreContext
 	ctx.Clock = clock
 	ctx.Transport = multiraft.NewLocalRPCTransport()
-	store := NewStore(ctx, e, &proto.NodeDescriptor{NodeID: 1})
+	stopper := util.NewStopper()
+	defer stopper.Stop()
+	store := NewStore(ctx, e, &proto.NodeDescriptor{NodeID: 1}, stopper)
 	r, err := NewRange(desc, store)
 	if err != nil {
 		t.Fatal(err)

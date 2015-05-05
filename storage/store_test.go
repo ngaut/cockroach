@@ -23,7 +23,6 @@ import (
 	"bytes"
 	"fmt"
 	"math"
-	"sort"
 	"testing"
 	"time"
 
@@ -147,7 +146,7 @@ func createTestStore(t *testing.T) (*Store, *hlc.ManualClock, *util.Stopper) {
 	eng := engine.NewInMem(proto.Attributes{}, 10<<20)
 	ctx.Transport = multiraft.NewLocalRPCTransport()
 	stopper.AddCloser(ctx.Transport)
-	store := NewStore(ctx, eng, &proto.NodeDescriptor{NodeID: 1})
+	store := NewStore(ctx, eng, &proto.NodeDescriptor{NodeID: 1}, stopper)
 	if err := store.Bootstrap(proto.StoreIdent{NodeID: 1, StoreID: 1}, stopper); err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +172,7 @@ func TestStoreInitAndBootstrap(t *testing.T) {
 	stopper := util.NewStopper()
 	stopper.AddCloser(ctx.Transport)
 	defer stopper.Stop()
-	store := NewStore(ctx, eng, &proto.NodeDescriptor{NodeID: 1})
+	store := NewStore(ctx, eng, &proto.NodeDescriptor{NodeID: 1}, stopper)
 
 	// Can't start as haven't bootstrapped.
 	if err := store.Start(stopper); err == nil {
@@ -196,7 +195,7 @@ func TestStoreInitAndBootstrap(t *testing.T) {
 	}
 
 	// Now, attempt to initialize a store with a now-bootstrapped range.
-	store = NewStore(ctx, eng, &proto.NodeDescriptor{NodeID: 1})
+	store = NewStore(ctx, eng, &proto.NodeDescriptor{NodeID: 1}, stopper)
 	if err := store.Start(stopper); err != nil {
 		t.Errorf("failure initializing bootstrapped store: %s", err)
 	}
@@ -223,7 +222,7 @@ func TestBootstrapOfNonEmptyStore(t *testing.T) {
 	stopper := util.NewStopper()
 	stopper.AddCloser(ctx.Transport)
 	defer stopper.Stop()
-	store := NewStore(ctx, eng, &proto.NodeDescriptor{NodeID: 1})
+	store := NewStore(ctx, eng, &proto.NodeDescriptor{NodeID: 1}, stopper)
 
 	// Can't init as haven't bootstrapped.
 	if err := store.Start(stopper); err == nil {
@@ -233,24 +232,6 @@ func TestBootstrapOfNonEmptyStore(t *testing.T) {
 	// Bootstrap should fail on non-empty engine.
 	if err := store.Bootstrap(testIdent, stopper); err == nil {
 		t.Error("expected bootstrap error on non-empty store")
-	}
-}
-
-func TestRangeSliceSort(t *testing.T) {
-	defer leaktest.AfterTest(t)
-	var rs RangeSlice
-	for i := 4; i >= 0; i-- {
-		r := &Range{}
-		r.SetDesc(&proto.RangeDescriptor{StartKey: proto.Key(fmt.Sprintf("foo%d", i))})
-		rs = append(rs, r)
-	}
-
-	sort.Sort(rs)
-	for i := 0; i < 5; i++ {
-		expectedKey := proto.Key(fmt.Sprintf("foo%d", i))
-		if !bytes.Equal(rs[i].Desc().StartKey, expectedKey) {
-			t.Errorf("Expected %s, got %s", expectedKey, rs[i].Desc().StartKey)
-		}
 	}
 }
 
@@ -359,7 +340,7 @@ func TestStoreRangeIterator(t *testing.T) {
 	}
 
 	// Verify two passes of the iteration.
-	iter := newStoreRangeIterator(store)
+	iter := newStoreRangeIterator(store, stopper)
 	for pass := 0; pass < 2; pass++ {
 		for i := 1; iter.EstimatedCount() > 0; i++ {
 			if rng := iter.Next(); rng == nil || rng.Desc().RaftID != int64(i) {
@@ -374,40 +355,50 @@ func TestStoreRangeIterator(t *testing.T) {
 	if ec := iter.EstimatedCount(); ec != 9 {
 		t.Errorf("expected 9 remaining; got %d", ec)
 	}
-	// Split the first range to insert a new range as second range.
-	rng := createRange(store, 11, proto.Key("a000"), proto.Key("a01"))
-	if err = store.SplitRange(store.LookupRange(proto.Key("a00"), nil), rng); err != nil {
+	// Split the second range to insert a new range as third range.
+	rng := createRange(store, 11, proto.Key("a010"), proto.Key("a02"))
+	if err = store.SplitRange(store.LookupRange(proto.Key("a01"), nil), rng); err != nil {
 		t.Fatal(err)
 	}
 	// Estimated count will still be 9, as it's cached, but next() will refresh.
 	if ec := iter.EstimatedCount(); ec != 9 {
 		t.Errorf("expected 9 remaining; got %d", ec)
 	}
+	if r := iter.Next(); r.Desc().RaftID != 2 {
+		t.Errorf("expected raftID=3; got %d", r.Desc().RaftID)
+	}
+	// Verify we visit the new range.
 	if r := iter.Next(); r == nil || r != rng {
 		t.Errorf("expected r==rng; got %d", r.Desc().RaftID)
 	}
-	if ec := iter.EstimatedCount(); ec != 9 {
-		t.Errorf("expected 9 remaining; got %d", ec)
+	if ec := iter.EstimatedCount(); ec != 8 {
+		t.Errorf("expected 8 remaining; got %d", ec)
 	}
 
-	// Now, remove the next range in the iteration but verify iteration
+	// Now, remove the range in the iteration but verify iteration
 	// continues as expected.
-	rng = store.LookupRange(proto.Key("a01"), nil)
-	if rng.Desc().RaftID != 2 {
-		t.Errorf("expected fetch of raftID=2; got %d", rng.Desc().RaftID)
+	rng = store.LookupRange(proto.Key("a04"), nil)
+	if rng.Desc().RaftID != 5 {
+		t.Errorf("expected fetch of raftID=5; got %d", rng.Desc().RaftID)
 	}
 	if err := store.RemoveRange(rng); err != nil {
 		t.Error(err)
 	}
-	if ec := iter.EstimatedCount(); ec != 9 {
-		t.Errorf("expected 9 remaining; got %d", ec)
+	if ec := iter.EstimatedCount(); ec != 8 {
+		t.Errorf("expected 8 remaining; got x`%d", ec)
 	}
-	// Verify we skip removed range (id=2).
+	// Verify we skip removed range (id=5).
 	if r := iter.Next(); r.Desc().RaftID != 3 {
 		t.Errorf("expected raftID=3; got %d", r.Desc().RaftID)
 	}
-	if ec := iter.EstimatedCount(); ec != 7 {
-		t.Errorf("expected 7 remaining; got %d", ec)
+	if r := iter.Next(); r.Desc().RaftID != 4 {
+		t.Errorf("expected raftID=4; got %d", r.Desc().RaftID)
+	}
+	if r := iter.Next(); r.Desc().RaftID != 6 {
+		t.Errorf("expected raftID=6; got %d", r.Desc().RaftID)
+	}
+	if ec := iter.EstimatedCount(); ec != 4 {
+		t.Errorf("expected 4 remaining; got %d", ec)
 	}
 }
 
