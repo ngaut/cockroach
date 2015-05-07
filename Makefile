@@ -23,6 +23,7 @@ GO ?= go
 GOFLAGS :=
 # Set to 1 to use static linking for all builds (including tests).
 STATIC :=
+COCKROACH := cockroach
 # The cockroach image to be used for starting Docker containers
 # during acceptance tests. Usually cockroachdb/cockroach{,-dev}
 # depending on the context.
@@ -69,7 +70,7 @@ build: LDFLAGS += -X github.com/cockroachdb/cockroach/util.buildTag "$(shell git
 build: LDFLAGS += -X github.com/cockroachdb/cockroach/util.buildTime "$(shell date -u '+%Y/%m/%d %H:%M:%S')"
 build: LDFLAGS += -X github.com/cockroachdb/cockroach/util.buildDeps "$(shell GOPATH=${GOPATH} build/depvers.sh)"
 build:
-	$(GO) build -tags '$(TAGS)' $(GOFLAGS) -ldflags '$(LDFLAGS)' -v -i -o cockroach
+	$(GO) build -tags '$(TAGS)' $(GOFLAGS) -ldflags '$(LDFLAGS)' -v -i -o $(COCKROACH)
 
 # Similar to "testrace", we want to cache the build before running the
 # tests.
